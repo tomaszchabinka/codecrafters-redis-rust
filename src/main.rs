@@ -1,37 +1,61 @@
-use std::error::Error;
-use std::io::prelude::*;
-use std::net::{TcpListener, TcpStream};
+use std::{
+    error::Error,
+    io::{Read, Write},
+};
+use tokio::{
+    io::{self},
+    net::{TcpListener, TcpStream},
+};
 
-fn handle_connection(mut _stream: TcpStream) -> Result<(), Box<dyn Error>> {
+async fn handle_connection(stream: TcpStream) {
     println!("handle_connection");
     let mut buf = vec![0; 8196];
-    while let Ok(n) = _stream.read(&mut buf) {
-        if n == 0 {
-            break;
-        }
-        //sleep(Duration::from_millis(5 * 1000));
-        println!("received {} bytes", n);
-        println!("data: {:?}", String::from_utf8(Vec::from(&buf[0..n]))?);
-        _ = _stream.write(b"+PONG\r\n");
-    }
 
-    Ok(())
+    let mut std_tcp_stream = stream.into_std().unwrap();
+    std_tcp_stream.set_nonblocking(false).unwrap();
+
+    loop {
+        match std_tcp_stream.read(&mut buf) {
+            Ok(0) => {
+                println!("empty input");
+                break;
+            }
+            Ok(n) => {
+                println!("read {} bytes", n);
+                println!(
+                    "data: {:?}",
+                    String::from_utf8(Vec::from(&buf[0..n])).unwrap()
+                );
+                _ = std_tcp_stream.write_all(b"+PONG\r\n");
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                println!("io::ErrorKind::WouldBlock");
+                continue;
+            }
+            Err(_e) => {
+                println!("break");
+                break;
+            }
+        }
+    }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
 
-    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:6379").await?;
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut _stream) => _ = handle_connection(_stream),
+    loop {
+        match listener.accept().await {
+            Ok((mut _stream, _addr)) => {
+                println!("new connection {:?}", _addr);
+                tokio::spawn(async move { handle_connection(_stream).await });
+            }
             Err(e) => {
                 println!("error: {}", e);
             }
         }
     }
-
-    Ok(())
 }
